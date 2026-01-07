@@ -1,0 +1,242 @@
+#cdesmond
+
+
+#i love python
+import pandas as pd
+import re
+
+#main function
+if __name__ == "__main__":
+    keywords = pd.read_csv("SDG_kw.csv")
+    facultyWorkshop = pd.read_csv("WSfaculty.csv") #faculty that attended sustainability workshop (not necessarily sustainable)
+    coursesWorkshop = pd.read_csv("WScourses.csv") #courses revised from workshop
+    sustainableFaculty = pd.read_csv("RSfaculty.csv") #faculty we've designated as having done sustainable research in the past 3 years (not necessarily sustainable)
+    prevIdentifiedCourses = pd.read_csv("PrevSust.csv") #courses previously identified as sustainable
+    CCencounters = pd.read_csv("ccencounters.csv") #courses with CC attribute
+    
+    #need to do:
+    #create loop to iterate through input course files
+    #for each course, check course description for keyword matches (CHECK COURSE TITLE FOR THIS TOO!!!!!!!)
+    #                 check faculty for workshop/revised/sustainable
+    #                 check if sustainable course/revised syllabi for course
+    #output results to new csv file
+    
+    #also yoink a bunch of files from the course sheet to data :p
+    
+    
+    #--- KEYWORD -------------------------------------------------------------------------------------------
+    
+    def keywordCheck(course_row, kw_patterns, where):
+        """Check a courses title and description for keyword matches.
+        
+        kw_patterns is a list of dicts with keys: 'pattern' (compiled re) and 'SDG'.
+        Patterns are whole-word and allow optional plural/possessive forms (e.g. womens, women's).
+        """
+        justifications = []
+        title = str(course_row.get('TITLE', '')).strip()
+        desc = str(course_row.get('DESCRIPTION', '')).strip()
+        text = title + " " + desc
+        for item in kw_patterns:
+            pat = item['pattern']
+            if pat.search(text):
+                justifications.append(f"{item['SDG']}")
+                data.at[where, 'Sustainable'] = 1
+                data.at[where, 'Keyword Match'] = 1
+        return justifications
+                    
+    
+    # precompile keyword patterns for whole-word matching with optional plural/possessive endings using regex :p
+    kw_patterns = []
+    for _, krow in keywords.iterrows():
+        word = str(krow.get('Words', '')).strip()
+        if not word:
+            continue
+        # match whole word (avoid cases like art being flagged in earth), allowing optional plural or possessive endings (e.g. women, womens, women's)
+        pattern = re.compile(rf"\b{re.escape(word)}(?:'s|s)?\b", flags=re.IGNORECASE)
+        kw_patterns.append({'pattern': pattern, 'SDG': krow.get('SDG_Number')})
+
+    #-------------------------------------------------------------------------------------------------------
+
+    def get_base_course(course_row):
+        """
+        Safely extract base course code by removing section suffix.
+        Returns None if COURSE is missing or invalid.
+        """
+        raw_course = course_row.get('COURSE')
+
+        if pd.isna(raw_course):
+            return None
+
+        raw_course = str(raw_course).strip()
+
+        if len(raw_course) < 4:
+            return None
+
+        return raw_course[:-4]
+
+
+
+    
+    #--- PREVIOUSLY IDENTIFIED COURSES CHECK ---------------------------------------------------------------
+    
+    #Department,CourseName,Course,Program,CourseCode,Offerings that are sustainable,CourseDescription,Focused or Inclusive,Cross Listed
+    #'Specific Offerings' in 'Offerings that are sustainable' is ignored. Only instructor-specific offerings are considered.
+    #Cross listed courses should be split by comma if comma found
+    
+    crossListed = []
+    
+    def prevIdentifiedCheck(course_row, where):
+        #all offerings
+        try:
+            course = get_base_course(course_row)
+            if course is None:
+                return [] #remove last 4 characters of row['COURSE'] to match course
+        except Exception as e:
+            print(f"Error processing course row at index {where}: {e}")
+        justifications = []
+        for _, prow in prevIdentifiedCourses.iterrows():
+            if ("All" in prow['Offerings that are sustainable']):
+                if (prow['Course'] == course): #remove last 4 characters of row['COURSE'] to match course
+                    justifications.append("Previously Identified Course (All Offerings)")
+                    data.at[where, 'Prev Identified Match'] = 1
+                    if (prow['Cross Listed']):
+                        crossListed.append(prow['Course'])
+                    break
+            #instructor specific offerings
+            elif (prow['Offerings that are sustainable'] != "Specific Offerings"):
+                if (prow['Course'] == course): #remove last 4 characters of row['COURSE'] to match course
+                    if (course_row['INSTRUCTOR'] == prow['Offerings that are sustainable']):
+                        justifications.append("Previously Identified Course (Specific Instructor)")
+                        data.at[where, 'Prev Identified Match'] = 1
+                        if (prow['Cross Listed']):
+                            crossListed.append(prow['Course'])
+                    break
+        return justifications
+    
+    #-------------------------------------------------------------------------------------------------------
+    
+    #--- FACULTY FLAGGING ----------------------------------------------------------------------------------
+    #go through faculty workshop, sustainable faculty, and set to 1 if faculty matches
+    
+    def facultyFlagging(course_row, where):
+            justifications = []
+            instr = str(course_row.get('INSTRUCTOR', '')).casefold().strip()
+            # check faculty workshop list
+            for __, prow in facultyWorkshop.iterrows():
+                prow_instr = str(prow.get('Instructor', '')).casefold().strip()
+                if prow_instr and prow_instr == instr:
+                    justifications.append('Attended Sustainability Workshop')
+                    data.at[where, 'WS/Sustainable Faculty Match'] = 1
+                    break
+            # check sustainable research faculty list
+            for __, srow in sustainableFaculty.iterrows():
+                sname = str(srow.get('Faculty-name', '')).casefold().strip()
+                if sname and sname == instr:
+                    justifications.append('Sustainable Research Faculty')
+                    data.at[where, 'WS/Sustainable Faculty Match'] = 1
+                    break
+            return justifications
+    
+    #-------------------------------------------------------------------------------------------------------
+    
+    #--- WS COURSES CHECK ----------------------------------------------------------------------------------
+    
+    #check if course was revised in sustainability workshop by seeing if course and instructor match, if yes sustainable!
+    def wsCourseCheck(course_row, where):
+        justifications = []
+        course_code = get_base_course(course_row)
+        if course_code is None:
+            return []
+        instr = str(course_row.get('INSTRUCTOR', '')).casefold().strip()
+        for __, crow in coursesWorkshop.iterrows():
+            ws_course = str(crow.get('Course and Section', '')).strip()
+            ws_instr = str(crow.get('Instructor', '')).casefold().strip()
+            if ws_course and ws_course == course_code and ws_instr == instr:
+                justifications.append('Revised in Sustainability Workshop')
+                data.at[where, 'Course WS Match'] = 1
+                data.at[where, 'Sustainable'] = 1
+                break
+        return justifications
+    
+    #-------------------------------------------------------------------------------------------------------
+    
+    #--- WS COURSES CHECK ----------------------------------------------------------------------------------
+    
+    #flag courses with CC encounter
+    def ccEncounterCheck(course_row, where):
+        justifications = []
+        course_code = get_base_course(course_row)
+        if course_code is None:
+            return []
+        for __, crow in CCencounters.iterrows():
+            cc_course = str(crow['Course'])
+            if cc_course == course_code:
+                justifications.append('CC')
+                data.at[where, 'CC Encounter Match'] = 1
+                return justifications
+        #if not found in cc encounters, check ATTR field for 'cc'
+        if "cc" in str(course_row.ATTR).casefold().strip():
+            justifications.append('CC')
+            data.at[where, 'CC Encounter Match'] = 2
+        return justifications
+    
+    #-------------------------------------------------------------------------------------------------------
+    
+    
+    
+    
+    
+    #-------------------------------------------------------------------------------------------------------
+    
+    #--Main-------------------------------------------------------------------------------------------------
+    
+    #-------------------------------------------------------------------------------------------------------
+    
+    data = pd.read_csv("/Users/maggiesobaszeh/Documents/VS/csv/classes.csv", sep = ",")
+    # PRESERVE original course descriptions
+    data['Original Description'] = data['DESCRIPTION']
+    
+    data['Sustainable'] = 0 #initialize column to 0
+    data['Justification'] = "" #initialize justification column
+    data['Keyword Match'] = 0 #initialize keyword match column
+    data['Course WS Match'] = 0 #initialize course workshop match column
+    data['WS/Sustainable Faculty Match'] = 0 #initialize sustainable faculty match column
+    data['Prev Identified Match'] = 0 #initialize previously identified course match column
+    data['CC Encounter Match'] = 0 #initialize CC encounter match column
+    
+    justifications = []
+    
+    for index, row in data.iterrows():
+        #start of loop for each course
+        justifications = []
+        #keyword check
+        justifications.extend(keywordCheck(row, kw_patterns, index))
+        #prev identified courses
+        justifications.extend(prevIdentifiedCheck(row, index))
+        #faculty checks
+        justifications.extend(facultyFlagging(row, index))
+        #workshop courses
+        justifications.extend(wsCourseCheck(row, index))
+        #cc check
+        justifications.extend(ccEncounterCheck(row, index))
+        
+        if justifications != []: #if there are any justifications, set justification column
+            for i in justifications:
+                if i != justifications[-1]: #avoid trailing comma
+                    data.at[index, 'Justification'] += i + ", "
+                else:
+                    data.at[index, 'Justification'] += i
+        
+        if index % 500 == 0:
+            print(f"Processed {index} courses...")
+
+    
+    for index, row in data.iterrows():
+        if row.COURSE in crossListed:
+            data.at[index, 'Justification'] += ", Cross Listed (Prev Identified Match)"
+            data.at[index, 'Prev Identified Match'] = 1
+        
+    
+    print(data)
+    data.to_csv("data_output.csv", sep = "|", index = False)
+    
