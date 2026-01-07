@@ -1,6 +1,11 @@
 #cdesmond
 
 
+#make sure there's no line breaks in original courses sheet
+# to find ctrl+f: \r\n|\n|\r 
+# and check 'search using regular expressions' 
+#replace all with just a space
+
 #i love python
 import pandas as pd
 import re
@@ -27,22 +32,25 @@ if __name__ == "__main__":
     #--- KEYWORD -------------------------------------------------------------------------------------------
     
     def keywordCheck(course_row, kw_patterns, where):
-        """Check a courses title and description for keyword matches.
-        
-        kw_patterns is a list of dicts with keys: 'pattern' (compiled re) and 'SDG'.
-        Patterns are whole-word and allow optional plural/possessive forms (e.g. womens, women's).
-        """
         justifications = []
+        matched_keywords = set()
+
         title = str(course_row.get('TITLE', '')).strip()
         desc = str(course_row.get('DESCRIPTION', '')).strip()
         text = title + " " + desc
+
         for item in kw_patterns:
-            pat = item['pattern']
-            if pat.search(text):
-                justifications.append(f"{item['SDG']}")
+            if item['pattern'].search(text):
+                justifications.append(str(item['SDG']))
+                matched_keywords.add(item['word'])
                 data.at[where, 'Sustainable'] = 1
                 data.at[where, 'Keyword Match'] = 1
+
+        if matched_keywords:
+            data.at[where, 'Matched Keywords'] = "|".join(sorted(matched_keywords))
+
         return justifications
+
                     
     
     # precompile keyword patterns for whole-word matching with optional plural/possessive endings using regex :p
@@ -51,9 +59,13 @@ if __name__ == "__main__":
         word = str(krow.get('Words', '')).strip()
         if not word:
             continue
-        # match whole word (avoid cases like art being flagged in earth), allowing optional plural or possessive endings (e.g. women, womens, women's)
         pattern = re.compile(rf"\b{re.escape(word)}(?:'s|s)?\b", flags=re.IGNORECASE)
-        kw_patterns.append({'pattern': pattern, 'SDG': krow.get('SDG_Number')})
+        kw_patterns.append({
+            'pattern': pattern,
+            'SDG': krow.get('SDG_Number'),
+            'word': word
+        })
+
 
     #-------------------------------------------------------------------------------------------------------
 
@@ -199,6 +211,8 @@ if __name__ == "__main__":
     data['Sustainable'] = 0 #initialize column to 0
     data['Justification'] = "" #initialize justification column
     data['Keyword Match'] = 0 #initialize keyword match column
+    data['Matched Keywords'] = ""
+    data['Justification'] = ""
     data['Course WS Match'] = 0 #initialize course workshop match column
     data['WS/Sustainable Faculty Match'] = 0 #initialize sustainable faculty match column
     data['Prev Identified Match'] = 0 #initialize previously identified course match column
@@ -223,7 +237,7 @@ if __name__ == "__main__":
         if justifications != []: #if there are any justifications, set justification column
             for i in justifications:
                 if i != justifications[-1]: #avoid trailing comma
-                    data.at[index, 'Justification'] += i + ", "
+                    data.at[index, 'Justification'] += i + " | ".join(justifications)
                 else:
                     data.at[index, 'Justification'] += i
         
@@ -232,11 +246,18 @@ if __name__ == "__main__":
 
     
     for index, row in data.iterrows():
-        if row.COURSE in crossListed:
+        if row.Course in crossListed:
             data.at[index, 'Justification'] += ", Cross Listed (Prev Identified Match)"
             data.at[index, 'Prev Identified Match'] = 1
         
     
     print(data)
-    data.to_csv("data_output.csv", sep = "|", index = False)
+    data.to_csv(
+        "data_output.csv",
+        sep="|",                  # use | as separator for output
+        index=False,
+        
+    )
+
+
     
